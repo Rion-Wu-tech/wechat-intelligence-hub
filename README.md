@@ -1,24 +1,26 @@
 # WeChat Intelligence Hub
 
-微信个人情报库：把本地微信聊天变成可检索、可核查、可行动的个人情报，包括联系人历史、群聊主题、待回复、承诺、商机、复联线索，以及任意指定时间范围的情报报告。
+微信个人情报库：把本地微信聊天变成可检索、可核查、可行动的个人情报，包括联系人历史、群聊主题、待回复、承诺、商机、复联线索，以及任意指定时间范围的情报报告。同时内置全新 **WeChat Slim 微信存储智能瘦身引擎**，通过 APFS 硬链接秒省数十 GB 空间。
 
-这不是 Prompt 大礼包，而是一个独立的微信旗舰项目。仓库同时提供只读数据入口和情报工作流，并配有可执行入口、边界、测试和全虚构样例。
+这不是 Prompt 大礼包，而是一个独立的微信旗舰项目。仓库同时提供只读数据入口、情报工作流与无损瘦身工具，并配有可执行入口、边界、测试和全虚构样例。
 
 当前首发版本为 `v0.9.2-preview.2`。微信相关代码已经具备公开测试条件，但不是“安装后自动读取所有人的完整微信历史”：完整数据库模式需要本人授权的本地数据库和访问材料。Reader 核心不获取密钥、不重签名、不注入、不 Hook 微信；可选的实验性接入助手有独立授权和副作用边界，见下文。
 
-## 一个产品，两个 Skill
+## 一个产品，三个 Skill / 模块
 
 | Skill / Project | 作用 | 状态 |
 |---|---|---|
 | `wechat-cli` | Rion 自有的只读 Reader 入口；v0.9.2-preview.2 已覆盖旧版接口、schema-2 salt-key 授权导入、WCDB 压缩消息与本机实读验收 | 依赖层 / Preview |
 | `wechat-intelligence-hub` | 把微信记录转成日报、待回复、承诺、商机和复联线索 | 用户入口 / Flagship |
+| `wechat-slim` | 专治 Mac 微信存储占用：APFS 原生硬链接秒级去重、核心人脉防删白名单与无损归档 | 维护工具 / New |
 
-微信能力在代码中分成四层，方便独立测试和维护；对用户仍是一套产品、一次安装：
+微信能力在代码中分成多层，方便独立测试和维护；对用户仍是一套产品、一次安装：
 
 - `projects/rion-wechat-reader/`：Rion 自有的 clean-room 只读 Reader 核心。
 - `skills/wechat-cli/`：Reader 的统一 Agent 入口，默认只调用 Rion 自有 Reader；只有使用者显式设置 `RION_WECHAT_CLI_BIN` 时才调用兼容后端。
 - `skills/wechat-intelligence-hub/`：Agent 的调用入口与判断规则。
-- `projects/wechat-intelligence-hub/`：确定性本地引擎、虚构样例和测试。
+- `skills/wechat-slim/`：微信存储智能瘦身 Agent Skill。
+- `projects/wechat-intelligence-hub/`：确定性本地情报引擎、微信瘦身引擎（`wechat_slim.py`）、虚构样例和测试。
 
 Rion 的通用 Skill 合集 `rionwu-skills` 只负责收录、发现和链接本项目，不复制微信读取器源码或 Git 历史。
 
@@ -91,11 +93,7 @@ export WECHAT_HUB_HOME="$PWD/projects/wechat-intelligence-hub"
 
 ```bash
 cd projects/wechat-intelligence-hub
-python3 wechat_intelligence_hub.py profile-init \
-  --owner-alias "你的微信昵称" \
-  --personal-doc "/path/to/个人说明.md" \
-  --plan-doc "/path/to/本月计划.md" \
-  --priority-label "你的重点联系人标签"
+python3 wechat_intelligence_hub.py profile-init   --owner-alias "你的微信昵称"   --personal-doc "/path/to/个人说明.md"   --plan-doc "/path/to/本月计划.md"   --priority-label "你的重点联系人标签"
 ```
 
 个人说明可以包含身份、业务、擅长领域、资源、约束和长期目标；当前计划可以包含近期目标、正在推进的项目、交付/收入优先级和截止时间。如果还没有这些文档，直接运行 `profile-init` 即可生成本地准备清单；在补齐前系统仍能生成通用报告，但会标明尚未个性化。
@@ -160,6 +158,54 @@ HTML 版支持全局搜索、分区导航、话题日报/重点群聊/群聊筛�
 除了按时间生成综合报告，还可以围绕某条信息、某个人、某个群、某个产品/物品、某个微信标签、某个项目或某件具体事件定向查找：系统会先定位相关消息和上下文，再按会话、时间和事件关系去重总结。单个对象和回复建议默认直接在 Codex 中回答，不会为了一个简单问题额外生成网页。如果希望定向调查也保存成双版本，请在请求中明确说“同时输出 Markdown 和 HTML”。
 
 更完整的首次使用、常用提问、输出模式和命令行说明见 [`docs/USAGE.md`](docs/USAGE.md)。
+
+---
+
+## 🍏 微信存储瘦身与安全去重 (WeChat Slim)
+
+针对 Mac 微信占用几十甚至上百 GB 存储的顽疾，仓库内置了专用的 **WeChat Slim** 安全瘦身套件。
+
+### 核心特性
+
+1. **APFS 原生硬链接秒级去重（零损省空间）**：
+   - 将多群转发的同一文件（视频、PPT、图片等）在底层磁盘扇区合并为指向同一物理数据块的硬链接；
+   - 磁盘立省数十 GB 物理空间，微信聊天窗口内文件原样可开、点击秒读。
+2. **核心人脉防删白名单（一票否决权）**：
+   - 支持将重要联系人、客户或核心项目群加入保护名单；
+   - 支持文件名关键词（如“合同、报价、发票”）保护；
+   - 执行清理时，命中白名单的文件统统跳过，绝无误删。
+3. **安全废纸篓与外置硬盘归档**：
+   - 拒绝 `rm -rf` 粗暴删除，默认移入 macOS 系统废纸篓，随时可放回原处；
+   - 支持一键将大文件完整迁移归档至外置移动硬盘或 NAS。
+4. **数据库 100% 物理隔离**：
+   - 底层代码对 `db_storage` 及所有 `*.db`, `*.sqlite`, `*.wcdb` 强制跳过，绝不篡改聊天记录数据库。
+
+### 快速上手
+
+```bash
+# 启动交互式终端向导
+python3 wechat_slim.py
+
+# 扫描当前微信存储占用
+python3 wechat_slim.py scan
+
+# 执行多群文件 APFS 硬链接去重
+python3 wechat_slim.py dedup --action hardlink -f
+
+# 清理 90 天前大于 10MB 的视频与文件（移动至废纸篓）
+python3 wechat_slim.py clean --days 90 --min-size 10MB --types video,file -f
+
+# 管理防删白名单
+python3 wechat_slim.py tag --list
+python3 wechat_slim.py tag --add "核心客户" --keywords "合同,发票"
+
+# 启动本地可视化仪表盘
+python3 wechat_slim.py web --port 8080
+```
+
+在 Codex 中亦可直接使用 `$wechat-slim` 进行自然语言清理与空间巡检，详见 [`skills/wechat-slim/SKILL.md`](skills/wechat-slim/SKILL.md)。
+
+---
 
 ## 隐私与安全
 

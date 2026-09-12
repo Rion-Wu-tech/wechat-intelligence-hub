@@ -15,3 +15,4 @@ keys.json
 all_keys.json
 access-runs/
 verified-access-*/
+*.egg-info/
