@@ -769,8 +769,13 @@ def brief_report(
     freshness_hours: float | None = None
     if latest_db_time:
         try:
-            freshness_hours = max(0.0, (current - datetime.fromisoformat(latest_db_time)).total_seconds() / 3600)
-        except ValueError:
+            parsed_db_time = datetime.fromisoformat(latest_db_time)
+            if parsed_db_time.tzinfo is None and current.tzinfo is not None:
+                parsed_db_time = parsed_db_time.astimezone()
+            elif parsed_db_time.tzinfo is not None and current.tzinfo is None:
+                parsed_db_time = parsed_db_time.replace(tzinfo=None)
+            freshness_hours = max(0.0, (current - parsed_db_time).total_seconds() / 3600)
+        except (ValueError, TypeError):
             pass
 
     by_chat: dict[str, list[dict[str, Any]]] = defaultdict(list)
