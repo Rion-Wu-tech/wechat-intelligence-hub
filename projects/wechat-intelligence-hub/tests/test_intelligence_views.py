@@ -376,7 +376,7 @@ class IntelligenceViewTests(unittest.TestCase):
     def test_reply_report_matches_close_friend_tone_and_uses_one_draft(self) -> None:
         self.insert(
             [
-                message("好友B", "创作者A", "2026-08-01 09:00:00", "bro我晚点看"),
+                message("好友B", "创作者A", "2026-08-01 09:00:00", "bro一条视频2000元"),
                 message("好友B", "好友B", "2026-08-02 10:00:00", "你这个是单个视频的价格吗"),
             ]
         )

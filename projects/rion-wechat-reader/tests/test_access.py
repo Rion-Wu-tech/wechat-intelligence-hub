@@ -632,6 +632,36 @@ class AccessOnboardingTests(unittest.TestCase):
         finally:
             fixture.tearDown()
 
+    def test_partial_relative_bundle_is_normalized_before_requesting_more_keys(self):
+        import test_reader as fixtures
+        if fixtures.SQLCIPHER is None:
+            self.skipTest("SQLCipher unavailable")
+        fixture = fixtures.ReaderContractTest()
+        fixture.setUp()
+        try:
+            key = "53" * 32
+            entries = {}
+            for source in (fixture.session, fixture.contact, fixture.message):
+                destination = self.db / "nested" / source.name
+                destination.parent.mkdir(exist_ok=True)
+                fixture.encrypt_fixture(source, destination, key)
+                entries[str(destination)] = key
+            extra = self.db / "nested" / "extra_message.db"
+            fixture.encrypt_fixture(fixture.message, extra, key)
+            entries[str(extra.relative_to(self.db))] = key
+            args = self.workflow_args()
+            args.source = self.root / "authorized.json"
+            args.source.write_text(json.dumps({"keys": entries}))
+            args.source.chmod(0o600)
+            initial = access.reader.access_plan(args.config, self.db, args.source, 500)
+            self.assertEqual(initial["state"], "partial")
+            with mock.patch.object(access, "run", side_effect=AssertionError("must not reacquire")):
+                preview = access.onboard(args)
+            self.assertEqual(preview["state"], "ready_to_configure")
+            self.assertFalse(args.config.exists())
+        finally:
+            fixture.tearDown()
+
     def test_normalized_salt_material_can_be_reused_and_salt_mismatch_rejected(self):
         import test_reader as fixtures
         if fixtures.SQLCIPHER is None:

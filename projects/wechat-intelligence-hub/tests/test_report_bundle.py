@@ -4,6 +4,7 @@ import unittest
 
 from report_bundle_html import build_combined_markdown, discover_report_sources
 from report_bundle_flagship import (
+    HTML_TEMPLATE,
     _normalize_details_markdown,
     _render_group_selector,
     _wrap_key_group_sections,
@@ -11,9 +12,23 @@ from report_bundle_flagship import (
     discover_report_sources as discover_flagship_sources,
     write_markdown_site,
 )
+from report_security import protect_document
 
 
 class ReportBundleTests(unittest.TestCase):
+    def test_flagship_appearance_preserves_single_script_security_boundary(self) -> None:
+        document = protect_document(HTML_TEMPLATE)
+
+        self.assertEqual(document.count("<script>"), 1)
+        self.assertIn("Content-Security-Policy", document)
+        for style in ("radar", "brief", "ledger"):
+            self.assertIn(f'name="report-style" value="{style}"', document)
+        for mode in ("system", "light", "dark"):
+            self.assertIn(f'name="report-mode" value="{mode}"', document)
+        self.assertIn("wechat-flagship-appearance", document)
+        self.assertIn("document.documentElement.dataset.ready='true'", document)
+        self.assertNotIn('id="theme-button"', document)
+
     def test_discovers_all_markdown_in_editorial_order(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -153,6 +153,49 @@ class RecoveryTests(unittest.TestCase):
         finally:
             setup.tearDown()
 
+    def test_other_known_tool_outputs_detected_without_read(self):
+        from test_access import AccessOnboardingTests
+        setup = AccessOnboardingTests()
+        setup.setUp()
+        try:
+            with mock.patch.object(access.Path, 'home', return_value=setup.root):
+                for relative in ('.wechat-cli/all_keys.json', '.wcdb-key-tool/wechat-passphrase.json'):
+                    material = setup.root / relative
+                    material.parent.mkdir(parents=True)
+                    material.write_text('PRIVATE MATERIAL MUST NOT BE READ')
+                args = setup.workflow_args()
+                with mock.patch.object(access.reader, 'access_plan', return_value=setup.plan('needs_access')), \
+                     mock.patch.object(access.reader, 'load_json', return_value={}), \
+                     mock.patch.object(access, 'run', side_effect=AssertionError('no acquisition')):
+                    result = access.onboard(args)
+                self.assertEqual(result['state'], 'existing_provider_material_available')
+                self.assertEqual([item['tool'] for item in result['material_candidates']],
+                                 ['wechat-cli', 'wcdb-key-tool'])
+                self.assertEqual([item['importable'] for item in result['material_candidates']], [True, False])
+                self.assertNotIn('PRIVATE', json.dumps(result))
+                self.assertNotIn(str(setup.root), json.dumps(result))
+                summary = access.support_summary(result)
+                self.assertEqual(summary['known_material_tools'], ['wcdb-key-tool', 'wechat-cli'])
+        finally:
+            setup.tearDown()
+
+    def test_passphrase_only_material_does_not_suggest_import(self):
+        from test_access import AccessOnboardingTests
+        setup = AccessOnboardingTests()
+        setup.setUp()
+        try:
+            with mock.patch.object(access.Path, 'home', return_value=setup.root):
+                material = setup.root / '.wcdb-key-tool/wechat-passphrase.json'
+                material.parent.mkdir(parents=True)
+                material.write_text('{}')
+                with mock.patch.object(access.reader, 'access_plan', return_value=setup.plan('needs_access')), \
+                     mock.patch.object(access.reader, 'load_json', return_value={}), \
+                     mock.patch.object(access, 'run', side_effect=AssertionError('no acquisition')):
+                    result = access.onboard(setup.workflow_args())
+                self.assertIn('口令格式', result['next_actions'][0])
+        finally:
+            setup.tearDown()
+
     def test_ready_configuration_still_signals_pending_recovery(self):
         plan = {'state': 'ready', 'live_database_read_ok': True, 'scope': 'test',
                 'counts': {}, 'performed': {}, 'next_actions': []}

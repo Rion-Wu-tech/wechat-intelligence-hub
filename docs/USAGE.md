@@ -247,11 +247,19 @@ HTML 版提供：
 - 点击群名展开详情
 - 根据活跃度和用户关注主题筛选群聊
 - 原始外部链接跳转
-- 明暗主题
+- 三套可切换风格（信号雷达、编辑简报、台账），每套都有跟随系统、亮色、暗色；选择只保存在本机浏览器
 - 打印或保存为 PDF
 - 下载当前分区 Markdown
 
 每位用户看到的界面结构一致，但报告内容会根据本地数据、时间范围、个人 Profile、微信标签和当前计划变化。
+
+自己另写的专题 Markdown（例如结算复盘）不会自动出现在 HTML 里。在报告目录新建 `report_manifest.json` 指定分区，再重新渲染：
+
+```json
+{"sources": [{"path": "services_review.md", "page": "contacts", "title": "定制服务跟进"}]}
+```
+
+`page` 可选 `overview`、`groups`、`contacts`、`radar`。没有写进清单的 Markdown，渲染命令会在结尾列出来。
 
 ## 6. 手动生成双版本
 

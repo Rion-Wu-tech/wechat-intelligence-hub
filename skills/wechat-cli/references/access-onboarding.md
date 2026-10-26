@@ -13,7 +13,7 @@ Codex负责执行检查、准备工具、获取材料、验证和配置。用户
 ## Codex执行的五步
 
 1. **环境与账号。** 执行 `reader.sh self-test` 和 `access.sh onboard`；检查本机微信版本、数据目录与读取依赖。多账号让用户选择，没有登录让用户登录；不要索要微信密码或扫码登录凭据。
-2. **复用或准备工具。** `ready`就复用；已有材料显式传 `--source`。`existing_provider_material_available`表示只检测到了本人`~/.config/wxcli/config.json`文件存在，尚未读取或确认可用；确认来源和账号后，Codex用`onboard --source`验证，不能把内容复制进对话。确实缺材料时，由Codex核验并准备[实验性获取工具](experimental-access.md#由codex准备工具)，不要让用户自己网上找key，也不要搜索无关应用的秘密文件。
+2. **复用或准备工具。** `ready`就复用；已有材料显式传 `--source`。`existing_provider_material_available`表示只检测到固定清单中某个已知工具的输出文件存在（`~/.config/wxcli/config.json`、`~/.wechat-cli/all_keys.json`、`~/.wcdb-key-tool/wechat-passphrase.json`），尚未读取或确认可用；`material_candidates`给出工具名和能否直接导入；确认来源和账号后，Codex用`onboard --source`验证，不能把内容复制进对话。确实缺材料时，由Codex核验并准备[实验性获取工具](experimental-access.md#由codex准备工具)，不要让用户自己网上找key，也不要搜索无关应用的秘密文件。
 3. **确认后获取。** 把进程访问、退出/重启微信和重签名副本的影响用一句话讲清。确认后Codex运行同一入口；管理员密码只由用户填进系统授权框，Agent不得代填、截图读取或从Keychain提取。
 4. **验证并配置。** 使用 `onboard --apply`；获取分支另需已审核工具、SHA256和两项确认参数。入口会串联获取、验证和新配置发布。部分覆盖、错误或取消即停止，不循环重试，不覆盖旧配置。
 5. **验收并交给情报库。** 运行doctor，按用户目标少量抽检私聊、群聊、标签和时间范围。发生过获取时还要检查`recovery_review_required`：数据库可读不证明微信界面已恢复。用户事后确认官方微信正常登录、获取进程和授权窗口已结束后，才执行[恢复确认](access-troubleshooting.md#完成恢复检查)。不需要默认导出全部聊天；返回“是否可读、覆盖范围、还缺什么”。用户需要日报时才交给情报库，不默认生成HTML。
@@ -68,6 +68,10 @@ Mac可研究 [wxkey](https://github.com/r266-tech/wxkey)。上游bootstrap可能
 使用有界尝试：扫描有进展时不要因起初零命中反复重启；超时、取消或同样失败再次出现就停止，条件改变才重试。密码、key和数据库不得发给Agent、群友或Issue。
 
 ## 导入与验收
+
+接入助手 `2026-10-05.1` 改进：同一raw key的大小写和SQLCipher字面量写法会先归一化；同时包含路径 `keys` 和 `salt_keys` 的材料会保留两类映射，不再丢失其中一类；规范化后冲突的同一salt或同一路径拒绝覆盖。`partial` 时也会先检查已有材料的相对路径转换，不直接要求再次获取。
+
+`diagnose --source ... --support-summary` 分别报告现有配置和新材料的下一步：现有配置正常但新材料缺SQLCipher时，继续使用原配置，同时修复验证环境，不再将两者混成“key失败”。这些改进是导入与诊断兼容性修复，不代表已解决所有首次获取、macOS副本启动策略或Windows获取问题。
 
 使用 `import-access --source ... --keys-file ... --verify` 显式导入授权材料。路径映射另需 `--database-root`；支持的schema-2文件带有 `db_root`。POSIX下key文件0600、父目录建议0700。不要覆盖现有可用材料，不能用 `--no-verify` 掩盖问题。
 

@@ -173,6 +173,8 @@ $HOME/.codex/skills/wechat-intelligence-hub/scripts/hub.sh opportunity-maintain
 $HOME/.codex/skills/wechat-intelligence-hub/scripts/hub.sh opportunity-maintain --apply
 ```
 
+把商机设为 `waiting` 必须同时给 `--follow-up YYYY-MM-DD`，日期格式不对会直接报错；用户没给日期时先问，不要替他编一个。
+
 `opportunities` 默认只显示正式机会；加 `--include-candidates` 才同时查看未经人工确认的候选。`opportunity-maintain` 默认只预览超过 14 天没有新证据的候选，明确确认后才使用 `--apply`。
 
 人工分流：

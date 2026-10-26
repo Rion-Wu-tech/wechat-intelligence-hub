@@ -23,7 +23,7 @@ import time
 
 import rion_wechat_reader as reader
 
-ACCESS_REVISION = "2026-09-30.3"
+ACCESS_REVISION = "2026-10-26.1"
 
 # Fixed messages only: exceptions may contain private paths or provider material.
 MATERIAL_ERRORS = {
@@ -57,11 +57,18 @@ def support_next_step(report: dict) -> str:
     state = report.get("state")
     if state == "ready" and report.get("live_database_read_ok") is True:
         return "use_existing_reader"
+    material_error = report.get("material_error", {}).get("code")
+    if material_error == "sqlcipher_driver_required":
+        return "repair_runtime_dependency"
+    if material_error == "unsafe_key_permissions":
+        return "review_local_permissions"
+    if material_error in {"database_root_missing", "database_root_required"}:
+        return "select_account_or_database"
     if state == "ready_to_configure":
         return "verify_then_configure"
     if state == "dependency_required":
         return "repair_runtime_dependency"
-    if state in {"account_selection_required", "needs_database_location", "database_missing"}:
+    if state in {"account_selection_required", "needs_database_location", "database_missing", "database_layout_ambiguous"}:
         return "select_account_or_database"
     if state in {"filesystem_access_required", "unsafe_key_permissions"}:
         return "review_local_permissions"
@@ -69,7 +76,7 @@ def support_next_step(report: dict) -> str:
         return "review_coverage"
     if state in {"verification_failed", "invalid_access_material", "access_material_requires_review"}:
         return "review_existing_material"
-    if state in {"needs_access", "acquisition_platform_not_supported"}:
+    if state in {"needs_access", "acquisition_platform_not_supported", "provider_required", "existing_provider_material_available"}:
         return "review_access_options"
     return "manual_review"
 
@@ -81,7 +88,8 @@ def support_summary(report: dict) -> dict:
               "database_layout_unsupported", "scan_incomplete", "account_selection_required",
               "access_material_requires_review", "acquisition_platform_not_supported",
               "existing_configuration_requires_review", "invalid_access_material", "database_missing",
-              "filesystem_access_required"}
+              "filesystem_access_required", "database_layout_ambiguous", "configuration_check_failed",
+              "provider_required", "existing_provider_material_available"}
     current_state = report.get("state")
     if current_state == "ready" and report.get("live_database_read_ok") is not True:
         current_state = "unknown"
@@ -111,7 +119,11 @@ def support_summary(report: dict) -> dict:
         code = preview.get("material_error", {}).get("code")
         result["material_preview"] = {
             "state": preview.get("state") if preview.get("state") in states else "unknown",
-            "error_code": code if code in MATERIAL_ERRORS else "none_or_unknown"}
+            "error_code": code if code in MATERIAL_ERRORS else "none_or_unknown",
+            "next_step_code": support_next_step(preview)}
+    known_tools = {tool for tool, _, _ in KNOWN_MATERIAL_LOCATIONS}
+    result["known_material_tools"] = sorted(item["tool"] for item in known_material_candidates()
+                                            if item["tool"] in known_tools)
     result["last_attempt_diagnostics"] = safe_diagnostics(report.get("last_attempt", {}).get("diagnostics", {}))
     attempt_state = report.get("last_attempt", {}).get("state")
     result["last_attempt_state"] = attempt_state if attempt_state in WORKER_STATES else "none_or_unknown"
@@ -157,8 +169,9 @@ def diagnose(args: argparse.Namespace) -> dict:
                       "historical_signals": signals, "recovery_review_required": bool(report.get("recovery_review_required")),
                       "system": report.get("environment", {}).get("system") if report.get("environment", {}).get("system") in {"Darwin", "Windows", "Linux"} else "unknown"},
             "questions": {"next_stage": {"type": "choice",
-                "instructions": "Select the next diagnostic stage. Current access_state outranks historical signals. ready or ready_to_configure means reuse, with separate recovery review if flagged. This is advice only; never infer permission to acquire keys or compatibility from a model answer.",
-                "criteria": {"reuse": "Current database access verified", "dependencies": "SQLCipher or runtime missing",
+                "instructions": "Select the next diagnostic stage. Recovery flag requires recovery review first. Current access_state outranks historical signals. ready means reuse; ready_to_configure requires explicit configuration confirmation. This is advice only; never infer permission to acquire keys or compatibility from a model answer.",
+                "criteria": {"reuse": "Current database access verified", "configure": "Material verified; configuration awaits confirmation",
+                             "recovery": "Client recovery requires review; do not acquire again", "dependencies": "SQLCipher or runtime missing",
                              "permissions": "File ACL or OS access", "material": "JSON, raw key format or salt",
                              "account": "Database location or selected account", "provider": "No material or acquisition unavailable",
                              "manual_review": "Insufficient or conflicting evidence"}}},
@@ -741,6 +754,22 @@ def run(args: argparse.Namespace) -> dict:
         raise AccessError("authorization_timeout_review_required")
 
 
+# Fixed output locations of known key tools, relative to HOME. Only existence is
+# checked; contents are read later and only when the user selects one via --source.
+KNOWN_MATERIAL_LOCATIONS = (
+    ("wxkey", ".config/wxcli/config.json", True),
+    ("wechat-cli", ".wechat-cli/all_keys.json", True),
+    ("wcdb-key-tool", ".wcdb-key-tool/wechat-passphrase.json", False),
+)
+
+
+def known_material_candidates() -> list[dict]:
+    home = Path.home()
+    return [{"tool": tool, "location": f"~/{relative}", "importable": importable}
+            for tool, relative, importable in KNOWN_MATERIAL_LOCATIONS
+            if os.path.lexists(home / relative)]
+
+
 def onboard(args: argparse.Namespace) -> dict:
     """Idempotent workflow: inspect, reuse, connect, or request acquisition consent."""
     config = private_path(args.config)
@@ -766,7 +795,7 @@ def onboard(args: argparse.Namespace) -> dict:
         return outcome
     # Relative-path bundles need normalization before discovery can match them.
     # Preview uses a disposable private directory, never publishes configuration.
-    if source is not None and plan["state"] == "verification_failed":
+    if source is not None and plan["state"] in {"verification_failed", "partial", "needs_access"}:
         material = reader.load_json(source)
         bundled = material.get("database_root") or material.get("db_root")
         material_root = root or (Path(str(bundled)).expanduser() if bundled else reader.default_wechat_root())
@@ -813,10 +842,14 @@ def onboard(args: argparse.Namespace) -> dict:
     if source is not None:
         outcome.update(state="access_material_requires_review", next_actions=["指定材料尚不能读取数据库，先检查该文件和账号，不自动改走获取路线。"])
         return outcome
-    existing_material = Path.home() / ".config/wxcli/config.json"
-    if os.path.lexists(existing_material):
+    found = known_material_candidates()
+    if found:
+        importable = [item for item in found if item["importable"]]
+        actions = ["检测到本机已知工具的输出文件，仅检查了是否存在，未读取内容或确认可用。确认属于所选账号后，以onboard --source显式指定该文件先验证；不要重新获取或覆盖它。"]
+        if not importable:
+            actions = ["检测到的材料是口令格式，需要按各数据库salt派生，当前助手尚不能直接导入；不要因此重新获取，先保留该文件。"]
         outcome.update(state="existing_provider_material_available",
-                       next_actions=["检测到本机wxcli材料文件，仅检查了是否存在，未读取内容或确认可用。确认它属于所选账号后，以onboard --source显式指定该文件先验证；不要重新获取或覆盖它。"])
+                       material_candidates=found, next_actions=actions)
         return outcome
     if platform.system() != "Darwin":
         outcome.update(state="acquisition_platform_not_supported", next_actions=["此助手尚未实现本系统获取；可以验证用户已有的授权材料。"])

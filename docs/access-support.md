@@ -27,7 +27,11 @@
 
 不自动扫描其他工具的私有配置，不运行聊天附件中的脚本，不把已解密数据库提交到Issue。
 
+2026-10-26起，`onboard`会检查固定清单中的已知工具输出（只看文件是否存在，不读内容）：wxkey 的 `~/.config/wxcli/config.json`、wechat-cli 的 `~/.wechat-cli/all_keys.json`、wcdb-key-tool 的 `~/.wcdb-key-tool/wechat-passphrase.json`。命中时返回 `material_candidates`，脱敏摘要只给工具名 `known_material_tools`。口令格式需按各库 salt 派生，暂不能直接导入；不要因此重新获取。
+
 ## Mac失败或换最新版仍失败
+
+已扫描完成但得到 0 个 key 时，社区资料（未经本仓库真机验证）指向两类原因：较新的 4.1.x 中 key 可能不再以可被字符串扫描的形式出现在内存；或派生只在登录、打开聊天等时刻发生。这类情况先记录微信完整版本和 `last_attempt_diagnostics.phase`，不要在同一版本上反复重试同一路线。
 
 不承诺所有最新版兼容，不默认降级、关闭SIP或重复重启微信。先运行`diagnose --support-summary`，结合具体系统、微信完整构建、状态码及上一次失败阶段定位。多开/修改版与官方版应分别记录；不能只看版本号就断言原因。
 

@@ -2406,9 +2406,7 @@ def import_access_bundle(
         loaded = json.loads(source.read_bytes())
     except (OSError, ValueError, UnicodeError) as exc:
         raise ReaderError("授权材料不是有效 JSON", "invalid_json") from exc
-    normalized_salt_map = isinstance(loaded, dict) and isinstance(loaded.get("salt_keys"), dict)
-    raw_entries = loaded.get("salt_keys", loaded.get("keys", loaded)) if isinstance(loaded, dict) else None
-    if not isinstance(raw_entries, dict):
+    if not isinstance(loaded, dict):
         raise ReaderError("授权材料必须是路径到 key 信息的对象", "invalid_access_bundle")
 
     try:
@@ -2416,6 +2414,17 @@ def import_access_bundle(
     except (TypeError, ValueError):
         schema_version = 0
     schema2_salt_map = schema_version >= 2 and isinstance(loaded, dict) and isinstance(loaded.get("keys"), dict)
+    wrapped = "keys" in loaded or "salt_keys" in loaded
+    entry_groups = []
+    if wrapped:
+        for field in ("keys", "salt_keys"):
+            if field not in loaded:
+                continue
+            if not isinstance(loaded[field], dict):
+                raise ReaderError("授权材料映射必须是对象", "invalid_access_bundle")
+            entry_groups.append((field == "salt_keys" or schema2_salt_map, loaded[field]))
+    else:
+        entry_groups.append((False, loaded))
     if database_root is None:
         bundled_root = (loaded.get("database_root") or loaded.get("db_root")) if isinstance(loaded, dict) else None
         if not bundled_root:
@@ -2430,7 +2439,6 @@ def import_access_bundle(
     imported: dict[str, dict[str, Any]] = {}
     imported_salts: dict[str, dict[str, Any]] = {}
     metadata_fields = {"database_root", "db_root", "schema_version", "wxid", "image_key"}
-    wrapped = "keys" in loaded or "salt_keys" in loaded
     metadata_count = len(set(loaded) - {"keys", "salt_keys"}) if wrapped else 0
     missing_file_count = 0
     root = database_root.resolve()
@@ -2443,7 +2451,9 @@ def import_access_bundle(
         "cipher_hmac_algorithm",
         "cipher_kdf_algorithm",
     }
-    for raw_name, raw_value in raw_entries.items():
+    for salt_map, raw_name, raw_value in (
+        (is_salt, name, value) for is_salt, entries in entry_groups for name, value in entries.items()
+    ):
         name = str(raw_name)
         if name.startswith("_") or (not wrapped and name in metadata_fields):
             metadata_count += 1
@@ -2453,7 +2463,8 @@ def import_access_bundle(
         elif isinstance(raw_value, dict):
             if raw_value.get("passphrase") is not None or raw_value.get("material_type") == "passphrase":
                 raise ReaderError("口令需要按数据库参数派生，不能作为raw key导入", "passphrase_requires_derivation")
-            supplied = [str(raw_value[field]).strip() for field in ("key", "enc_key", "raw_key") if raw_value.get(field)]
+            supplied = [DatabaseSet.validated_key_spec({"key": raw_value[field]}, "entry")["key"].lower()
+                        for field in ("key", "enc_key", "raw_key") if raw_value.get(field)]
             if len(set(supplied)) > 1:
                 raise ReaderError("同一条目存在冲突的密钥字段", "conflicting_key_fields")
             key = supplied[0] if supplied else None
@@ -2461,7 +2472,7 @@ def import_access_bundle(
             spec.update({parameter: raw_value[parameter] for parameter in allowed_parameters if parameter in raw_value})
         else:
             raise ReaderError("授权材料包含不支持的 key 条目", "invalid_access_bundle")
-        if schema2_salt_map or normalized_salt_map:
+        if salt_map:
             if not is_hex(name, {32}):
                 raise ReaderError("schema-2 授权材料包含无效数据库 salt", "invalid_access_bundle")
             raw_key = DatabaseSet.validated_key_spec(spec, "salt entry")["key"]
@@ -2471,10 +2482,14 @@ def import_access_bundle(
                 raw_key = raw_key[:64]
             if not is_hex(raw_key, {64}):
                 raise ReaderError("schema-2 enc_key 必须是 64 位十六进制", "invalid_key")
-            imported_salts[name.casefold()] = DatabaseSet.validated_key_spec(
+            validated = DatabaseSet.validated_key_spec(
                 {**spec, "key": raw_key + name.casefold()},
                 "schema-2 entry",
             )
+            validated["key"] = validated["key"].lower()
+            if name.casefold() in imported_salts and imported_salts[name.casefold()] != validated:
+                raise ReaderError("同一salt存在冲突的授权材料", "conflicting_key_fields")
+            imported_salts[name.casefold()] = validated
             continue
         normalized_name = name.replace("\\", "/")
         candidate = Path(normalized_name).expanduser()
@@ -2482,6 +2497,9 @@ def import_access_bundle(
         if not path_within(root, target):
             raise ReaderError("授权材料包含越界数据库路径", "unsafe_access_bundle_path")
         validated = DatabaseSet.validated_key_spec(spec, target.name)
+        validated["key"] = validated["key"].lower()
+        if str(target) in imported and imported[str(target)] != validated:
+            raise ReaderError("同一数据库存在冲突的授权材料", "conflicting_key_fields")
         imported[str(target)] = validated
         if not target.is_file():
             missing_file_count += 1
@@ -2498,12 +2516,15 @@ def import_access_bundle(
             salt = database_salt(candidate)
             if salt in imported_salts:
                 matched_salts.add(salt)
-        missing_file_count = len(set(imported_salts) - matched_salts)
+        missing_file_count += len(set(imported_salts) - matched_salts)
         staged_value: dict[str, Any] = {
             "salt_keys": imported_salts,
             "database_root": str(root),
         }
         import_format = "schema2_salt_map"
+        if imported:
+            staged_value["keys"] = imported
+            import_format = "mixed_key_map"
     else:
         staged_value = {"keys": imported, "database_root": str(root)}
         import_format = "path_key_map"

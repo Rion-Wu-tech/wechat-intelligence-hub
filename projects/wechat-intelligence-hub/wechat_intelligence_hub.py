@@ -328,7 +328,7 @@ SIGNAL_RULES = [
     ("创作", "待创作", 3, r"初稿|草稿|写完|内容|文案|thread|单帖|文章|quote repost|QR"),
     ("审核修改", "待品牌审核", 4, r"审核|过稿|修改|反馈|review|approve|revision|change"),
     ("待发布", "待发布", 4, r"发布链接|已发布|已经发布|已经发出|上线后|\bpost(?:ed)?\b|\bpublish(?:ed)?\b|go live|发出去了"),
-    ("结算", "已发布待结算", 5, r"结算|付款|打款|收款|发票|invoice|payment|paid|settle"),
+    ("结算", "已发布待结算", 5, r"结算|结款|月结|单结|付款|先付|先款|打款|收款|汇款|款项|稿费|全款|发票|专票|普票|开票|尾款|回款|对账(?!号)|定金|订金|预付|账期|invoice|payment|paid|settle"),
     (
         "发布后数据",
         "已发布待数据跟进",
@@ -374,6 +374,41 @@ DEFAULT_VAULT_KEYWORDS = [
     "转发",
     "转推",
 ]
+
+# Asking how invoicing or payment works before a deal exists is a terms question.
+# It must not be read as "published, awaiting settlement".
+PRE_DEAL_SETTLEMENT_TERMS = re.compile(
+    r"(?:合作|下单|签约|开始|确定|接单)(?:之)?前"
+    r"|(?:如果|要是|假如|若是?)[^。！？!?\n]{0,6}合作|合作的话"
+    r"|(?:可以|能|能否|可否|是否|能不能|可不可以|方便|支持)[^。！？!?\n]{0,10}(?:开|出|提供|走)[^。！？!?\n]{0,6}(?:发票|专票|普票|invoice|对公)"
+    r"|(?:发票|专票|普票|invoice)[^。！？!?\n]{0,12}(?:可以|能|能否|方便)[^。！？!?\n]{0,6}[吗么?？]"
+    r"|(?:怎么|如何|怎样|什么方式|哪种方式)[^。！？!?\n]{0,6}(?:结算|付款|打款|收款|开票)"
+    r"|(?:能不能|可不可以|能否|可否|是否)[^。！？!?\n]{0,8}(?:结算|付款|打款|收款|开票)"
+    r"|(?:结算|付款|收款|打款)(?:方式|流程|周期|节点|规则|条款)|账期|预付|定金|订金|先款后|先付"
+    # Asking whether a payment arrangement is acceptable, or which of two
+    # arrangements applies, is still negotiation.
+    r"|(?:接受|介意|同意)[^。！？!?\n]{0,3}[吗么?？]|(?:可以|行)[吗么][?？]?\s*$"
+    r"|(?:付|款|结算)[^。！？!?\n]{0,14}(?:还是|或者)|(?:还是|或者)[^。！？!?\n]{0,14}(?:付|款|结算)",
+    re.I,
+)
+# Only things that already happened, or a chase for money owed, count as
+# progress; "发布后付尾款" is a plan.
+SETTLEMENT_PROGRESS_TERMS = re.compile(
+    r"已(?:经)?(?:发布|发出|上线|交付|开票|付款|打款|结算|支付|到账|收到)|发票已|已开(?:好|具)|开好了|"
+    r"安排(?:付款|打款|结算)|(?:付|打)款(?:了|完)|结算(?:流程)?(?:了|完)|(?:打|转|付|汇)(?:过去|过来)了|"
+    r"到账|收到款|回款|对账(?!号)|催|麻烦[^。！？!?\n]{0,10}(?:安排|处理|跟进)|还没(?:到|收到|付|打|结)|"
+    # Asking when an invoice will actually be issued is a chase, not a capability question.
+    r"开出来|开票[^。！？!?\n]{0,4}进度",
+    re.I,
+)
+
+
+def settlement_signal(content: str) -> tuple[str, str, int]:
+    """Classify a message that hit the settlement keywords as (category, stage, priority)."""
+    if PRE_DEAL_SETTLEMENT_TERMS.search(content) and not SETTLEMENT_PROGRESS_TERMS.search(content):
+        return "结算条款", "待确认报价/排期", 4
+    return "结算", "已发布待结算", 5
+
 
 ACTIVE_STAGES = {"待回复", "待报价", "待 brief", "待确认报价/排期", "待创作", "待品牌审核", "待发布", "已发布待数据跟进"}
 SETTLEMENT_STAGES = {"已发布待结算", "已收款"}
@@ -799,6 +834,8 @@ def extract_signals(messages: list[Message]) -> list[Signal]:
         for category, stage, priority, pattern in compiled:
             if not pattern.search(message.content):
                 continue
+            if category == "结算":
+                category, stage, priority = settlement_signal(message.content)
             amount = " / ".join(clean_amounts(AMOUNT_PATTERN.findall(message.content)))
             signals.append(
                 Signal(
@@ -1350,6 +1387,7 @@ def filter_sessions_by_exclude_list(sessions: list[dict[str, Any]], exclude_list
 
 
 def timeline_messages_for_group(wechat_cli: Path, session: dict[str, Any], since: str | None, until: str | None, limit: int) -> list[Message]:
+    session.pop("_timeline_coverage", None)
     chat_name = str(session.get("display_name") or session.get("username") or "").strip()
     talker = str(session.get("username") or "").strip()
     if not talker:
@@ -1398,6 +1436,12 @@ def timeline_messages_for_group(wechat_cli: Path, session: dict[str, Any], since
                 )
             )
         query = extract_query(raw)
+        session["_timeline_coverage"] = {
+            "read": len(messages),
+            "limit": limit,
+            "incomplete": bool(query.get("has_more")),
+            "next_offset": query.get("next_offset"),
+        }
         if not rows or not query.get("has_more"):
             break
         next_offset = query.get("next_offset")
@@ -2847,6 +2891,8 @@ def write_group_daily_digest(
             f"{coverage.get('failed', 0)} 个群读取失败，不能据此判断这些群没有新消息。",
             "",
         ]
+    if coverage and coverage.get("incomplete"):
+        lines[3:3] = [f"> 覆盖不完整：{coverage['incomplete']} 个群仍有未读取的分页；当前结论仅基于已读取消息。", ""]
     if not action_rows:
         lines.append("当前窗口没有达到行动门槛的群聊线索。")
     for row in action_rows[:10]:
@@ -3159,6 +3205,9 @@ def extract_urls(text: str) -> list[str]:
     urls: list[str] = []
     for match in URL_PATTERN.findall(text or ""):
         normalized = normalize_url(match)
+        host = urlsplit(normalized).hostname or ""
+        if host in {"wxapp.tc.qq.com", "vweixinf.tc.qq.com", "support.weixin.qq.com"} or host.endswith(".qpic.cn") or host == "qpic.cn" or host.endswith(".qlogo.cn"):
+            continue
         if normalized and normalized not in urls:
             urls.append(normalized)
     return urls
@@ -3215,7 +3264,8 @@ def assess_link_deal_probability(messages: list[Message], chat_count: int) -> tu
     if explicit_non_deal_count:
         return "明确非商单", "原文明确写了非商单/纯分享", 0
     if chat_count >= 2 and paid_boost_count > 0:
-        reason = f"同链接在{chat_count}个群付费/红包加热"
+        paid_chats = len({message.chat for message in messages if PAID_BOOST_TERMS.search(message.content)})
+        reason = f"同链接跨{chat_count}个群出现，其中{paid_chats}个群有付费/红包加热信号"
         if high_follower:
             reason += "，且有万粉以上博主信号"
         return "高概率商单", reason, 3 if high_follower else 2
@@ -4880,6 +4930,8 @@ def opportunity_rows_to_markdown(rows: list[dict[str, Any]], title: str = "微�
         return "\n".join(lines) + "\n"
     for row in rows:
         follow_up = f"，跟进：{row['next_follow_up']}" if row["next_follow_up"] else ""
+        if not follow_up and row["status"] == "waiting":
+            follow_up = "，⚠️ 等待中但没有跟进日期，请补一个"
         amount = f"，预算/报价：{row['amount']}" if row["amount"] else ""
         display_title = row["title"] or row["chat"]
         record_label = OPPORTUNITY_RECORD_LABELS.get(
@@ -5775,6 +5827,7 @@ def group_daily(args: argparse.Namespace) -> None:
     sessions = filter_sessions_by_exclude_list(raw_sessions, exclude_list)
     all_messages: list[Message] = []
     failed_sessions: list[dict[str, str]] = []
+    incomplete_sessions: list[dict[str, Any]] = []
     succeeded_sessions = 0
     for session in sessions:
         messages: list[Message] | None = None
@@ -5802,6 +5855,9 @@ def group_daily(args: argparse.Namespace) -> None:
             )
             continue
         succeeded_sessions += 1
+        timeline_coverage = session.get("_timeline_coverage", {})
+        if timeline_coverage.get("incomplete"):
+            incomplete_sessions.append({"chat": str(session.get("display_name") or "未命名群聊"), **timeline_coverage})
         messages = filter_by_time(messages, since, until)
         if not messages:
             continue
@@ -5852,6 +5908,11 @@ def group_daily(args: argparse.Namespace) -> None:
         "succeeded": succeeded_sessions,
         "failed": len(failed_sessions),
         "failed_sessions": failed_sessions,
+        "incomplete": len(incomplete_sessions),
+        "incomplete_sessions": incomplete_sessions,
+        "since": since,
+        "until": until,
+        "reader_path": str(wechat_cli),
     }
     write_group_daily_digest(
         out_dir / "group_daily_digest.md",
@@ -5899,6 +5960,8 @@ def group_daily(args: argparse.Namespace) -> None:
     print(f"读取消息：{len(all_messages)} 条")
     if failed_sessions:
         print(f"读取失败：{len(failed_sessions)} 个群；详见 {out_dir / 'group_daily_coverage.json'}")
+    if incomplete_sessions:
+        print(f"覆盖不完整：{len(incomplete_sessions)} 个群仍有未读分页，请提高 --per-group-limit 后补读。")
     print(f"生成群聊摘要：{len(summaries)} 个")
     print(f"跨群/机会链接：{len(link_rows)} 个")
     print(f"语义编辑输入：{out_dir / 'group_daily_editorial_packet.json'}")
@@ -5963,6 +6026,13 @@ def render_bundle_command(args: argparse.Namespace) -> None:
     print(f"Markdown 报告入口：{markdown_path}")
     print(f"旗舰版交互 HTML：{html_path}")
     print(f"完整源报告：{len(sources)} 份；分区 Markdown 位于 {report_dir / 'wechat-report'}")
+    unmapped = [source.relative_path for source in sources if source.kind == "other"]
+    if unmapped:
+        print(
+            f"未进入 HTML 的 Markdown：{'、'.join(unmapped)}。"
+            "需要展示时，在报告目录的 report_manifest.json 里为它指定 page"
+            "（overview / groups / contacts / radar）后重新渲染。"
+        )
 
 
 def db_index(args: argparse.Namespace) -> None:

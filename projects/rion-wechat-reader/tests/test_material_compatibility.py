@@ -54,6 +54,56 @@ class MaterialCompatibilityTests(unittest.TestCase):
         data = reader.load_json(self.target)
         self.assertEqual(data["salt_keys"][self.salt]["key"], self.key + self.salt)
 
+    def test_equivalent_aliases_are_not_conflicts(self):
+        self.write({"message.db": {"key": self.key.upper(), "raw_key": "x'" + self.key + "'"}})
+        self.run_import()
+        self.assertEqual(reader.load_json(self.target)["keys"][str(self.root / "message.db")]["key"], self.key)
+
+    def test_mixed_maps_preserve_both_sources(self):
+        self.write({"keys": {"message.db": self.key}, "salt_keys": {self.salt: self.key}})
+        result = self.run_import()
+        self.assertEqual(result["format"], "mixed_key_map")
+        self.assertEqual(result["imported_key_count"], 2)
+        self.assertIn(str(self.root / "message.db"), reader.load_json(self.target)["keys"])
+        self.assertIn(self.salt, reader.load_json(self.target)["salt_keys"])
+
+    def test_canonical_duplicate_conflicts_and_bad_wrappers_rejected(self):
+        for value in (
+            {"salt_keys": {self.salt: self.key, self.salt.upper(): "ef" * 32}},
+            {"keys": {"message.db": self.key, "./message.db": "ef" * 32}},
+            {"keys": [], "salt_keys": {self.salt: self.key}},
+        ):
+            with self.subTest(value_type=list(value)):
+                self.write(value)
+                with self.assertRaises(reader.ReaderError):
+                    self.run_import()
+                self.assertFalse(self.target.exists())
+
+    def test_support_routes_material_failure_separately_from_working_reader(self):
+        preview = {"state": "access_material_requires_review",
+                   "material_error": {"code": "sqlcipher_driver_required"}}
+        report = {"state": "ready", "live_database_read_ok": True, "material_preview": preview}
+        summary = access.support_summary(report)
+        self.assertEqual(summary["next_step_code"], "use_existing_reader")
+        self.assertEqual(summary["material_preview"]["next_step_code"], "repair_runtime_dependency")
+        self.assertEqual(access.support_next_step({"state": "database_layout_ambiguous"}), "select_account_or_database")
+
+    @unittest.skipUnless(reader.sqlcipher_driver()[0], "SQLCipher required")
+    def test_mixed_maps_open_two_encrypted_databases(self):
+        driver = reader.sqlcipher_driver()[0]
+        databases = [self.root / name for name in ("first.db", "second.db")]
+        for database in databases:
+            conn = driver.connect(str(database))
+            conn.execute("PRAGMA key = \"x'" + self.key + "'\"")
+            conn.execute("CREATE TABLE fixture(value TEXT)")
+            conn.commit()
+            conn.close()
+        salt = reader.database_salt(databases[1])
+        self.write({"keys": {"first.db": self.key}, "salt_keys": {salt: self.key}})
+        result = reader.import_access_bundle(self.source, self.root, self.target,
+                                            force=False, verify=True, max_files=50)
+        self.assertEqual(result["verification"]["matched_database_count"], 2)
+
     def test_mismatch_conflict_and_passphrase_never_write(self):
         cases = [
             ({"schema_version": 2, "keys": {self.salt: self.key + "ef" * 16}}, "key_salt_mismatch"),

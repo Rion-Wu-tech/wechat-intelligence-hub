@@ -349,6 +349,19 @@ REPLY_ADVICE_TERMS = re.compile(
     r"建议|我觉得|最好|可以.{0,12}(?:精简|优化|调整)|对你.{0,12}(?:有用|有帮助|比较好)",
     re.I,
 )
+REPLY_CONCISE_ADVICE_TERMS = re.compile(r"精简|简洁|简短|短一点|太长|啰嗦|说人话")
+# Evidence gates for quote drafts: a draft may only restate a price fact that
+# the owner's own earlier messages in this chat actually contain.
+REPLY_OWNER_QUOTE_TERMS = re.compile(
+    r"\d[\d,.]*\s*(?:元|块|k|w|万|u|usd|usdt|rmb|刀|美金|美元|人民币)|[￥¥$]\s*\d",
+    re.I,
+)
+REPLY_PER_ITEM_TERMS = re.compile(r"单条|一条|每条|单个|单篇|一篇|每篇|单帖|一帖|一个视频|每个视频")
+REPLY_PER_ITEM_QUESTION = re.compile(
+    r"(?:单条|一条|每条|单个|单篇|一篇|每篇)[^。？?\n]{0,10}(?:价格|报价|费用|价)"
+    r"|(?:价格|报价|费用)[^。？?\n]{0,8}(?:单条|一条|每条|单个|单篇|一篇|每篇)"
+)
+REPLY_BATCH_TERMS = re.compile(r"批量|长期|多条|多篇|打包|包月|每月|每周|系列|\d+\s*(?:条|篇|期)")
 
 
 def _percentile(values: list[int], percentile: float) -> int:
@@ -501,6 +514,7 @@ def _reply_draft(
     relationship: str,
     chat_style: dict[str, Any],
     minimum_chat_messages: int = 5,
+    quote_context: dict[str, bool] | None = None,
 ) -> str:
     close = relationship in {"亲近朋友", "熟悉的合作对象"}
     enough_style = int(chat_style.get("messages") or 0) >= max(1, minimum_chat_messages)
@@ -508,13 +522,33 @@ def _reply_draft(
     laugh = str(chat_style.get("preferred_laugh") or "") if enough_style and close else ""
     casual_ack = ack if ack in {"好滴", "好嘞", "ok", "嗯嗯", "行"} else "收到"
     neutral_ack = ack if ack in {"好的", "收到", "ok"} else "收到"
-    if REPLY_ADVICE_TERMS.search(latest_content):
+    # A business intent outranks tone: "建议发票下周开" is about settlement, not style advice.
+    if intent == "general" and REPLY_ADVICE_TERMS.search(latest_content):
         suffix = laugh or "哈哈"
-        return f"有道理，我后面尽量说人话点{suffix}" if close else "有道理，我后面会再精简一点"
+        if REPLY_CONCISE_ADVICE_TERMS.search(latest_content):
+            return f"有道理，我后面尽量说人话点{suffix}" if close else "有道理，我后面会再精简一点"
+        return f"有道理，我回头调整下{suffix}" if close else "有道理，我回头调整一下"
+    if intent == "quote":
+        context = quote_context or {}
+        per_item = bool(context.get("owner_per_item_quote"))
+        if per_item and REPLY_BATCH_TERMS.search(latest_content):
+            return (
+                "对，前面是单条价。批量的话可以按数量重算，先问下大概每月几条就行"
+                if close
+                else "前面是单条定制价。批量可以按数量重算，麻烦先确认大概每月几条"
+            )
+        if per_item and REPLY_PER_ITEM_QUESTION.search(latest_content):
+            return "对，前面是单条价" if close else "是的，前面报的是单条价格"
+        if context.get("owner_quote"):
+            return "报价我确认下再跟你说" if close else "收到，报价我确认后回复你"
+        return (
+            "可以呀，先说下大概要做什么、几条，我给你报个价"
+            if close
+            else "收到，方便先说下具体需求和数量吗？我按这个给你报价"
+        )
     drafts = {
         "settlement": "我核对下结算信息，确认后跟你说" if close else "收到，我核对下结算信息，确认后回复你",
         "review": f"{casual_ack}，我按反馈改，完成后发你" if close else f"{neutral_ack}，我按反馈修改，完成后发你审核",
-        "quote": "对，前面是单条价。批量的话可以按数量重算，先问下大概每月几条就行" if close else "前面是单条定制价。批量可以按数量重算，麻烦先确认大概每月几条",
         "brief": f"{casual_ack}，我先看下，缺什么我一起问你" if close else f"{neutral_ack}，我先核对需求，缺的信息我集中确认",
         "schedule": "我看下现在的进度，确认后给你具体时间" if close else "我先核对进度，确认后给你具体时间",
         "general": "看到了，我确认下再跟你说" if close else "收到，我确认后回复你",
@@ -571,6 +605,16 @@ def reply_report(
     )
     closure = bool(REPLY_CLOSURE_TERMS.match(latest_content.strip()))
     reply_needed = bool(latest_incoming) and not owner_sent_last and not closure
+    owner_quotes = [
+        str(row.get("content") or "")
+        for row in conversation
+        if is_self_sender(str(row.get("sender") or ""), self_names)
+        and REPLY_OWNER_QUOTE_TERMS.search(str(row.get("content") or ""))
+    ]
+    quote_context = {
+        "owner_quote": bool(owner_quotes),
+        "owner_per_item_quote": any(REPLY_PER_ITEM_TERMS.search(text) for text in owner_quotes),
+    }
     recommended = (
         _reply_draft(
             intent,
@@ -578,6 +622,7 @@ def reply_report(
             relationship,
             chat_style,
             minimum_chat_messages=minimum_chat_messages,
+            quote_context=quote_context,
         )
         if reply_needed
         else ""
@@ -810,22 +855,63 @@ def topic_report(
     return "\n".join(lines).rstrip() + "\n", {"messages": len(messages), "chats": len(by_chat), "terms": terms}
 
 
-def _window_messages(conn: sqlite3.Connection, since: str, until: str, limit: int = 12000) -> list[dict[str, Any]]:
+WINDOW_MESSAGE_LIMIT = 60000
+
+
+def _window_coverage(
+    conn: sqlite3.Connection,
+    since: str,
+    until: str,
+    limit: int | None = None,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Read one time window and say how much of it was actually read.
+
+    When the window holds more rows than ``limit`` the newest rows win, because
+    pending replies and fresh requests live at the end of the window. The gap is
+    reported instead of being dropped silently.
+    """
     register_time_sql(conn)
     validate_window(since, until)
-    return [
+    limit = max(1, int(WINDOW_MESSAGE_LIMIT if limit is None else limit))
+    window = "message_epoch(time) >= message_epoch(?) and message_epoch(time) < message_epoch(?)"
+    rows = [
         dict(row)
         for row in conn.execute(
-            """
+            f"""
             select chat, sender, time, content, source_file
             from messages
-            where message_epoch(time) >= message_epoch(?) and message_epoch(time) < message_epoch(?)
-            order by message_epoch(time) asc, id asc
+            where {window}
+            order by message_epoch(time) desc, id desc
             limit ?
             """,
-            (since, until, limit),
+            (since, until, limit + 1),
         ).fetchall()
     ]
+    truncated = len(rows) > limit
+    total = len(rows)
+    if truncated:
+        rows = rows[:limit]
+        total = int(
+            conn.execute(f"select count(*) from messages where {window}", (since, until)).fetchone()[0]
+        )
+    rows.reverse()
+    coverage = {
+        "total": total,
+        "read": len(rows),
+        "truncated": truncated,
+        "omitted": total - len(rows),
+        "covered_since": str(rows[0]["time"]) if truncated and rows else "",
+    }
+    return rows, coverage
+
+
+def _window_messages(
+    conn: sqlite3.Connection,
+    since: str,
+    until: str,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    return _window_coverage(conn, since, until, limit)[0]
 
 
 def brief_report(
@@ -840,8 +926,10 @@ def brief_report(
     since_dt = current - timedelta(hours=max(1, hours))
     previous_since_dt = since_dt - timedelta(hours=max(1, hours))
     fmt = "%Y-%m-%d %H:%M:%S"
-    current_rows = _window_messages(conn, since_dt.isoformat(), current.isoformat())
-    previous_rows = _window_messages(conn, previous_since_dt.isoformat(), since_dt.isoformat())
+    current_rows, current_coverage = _window_coverage(conn, since_dt.isoformat(), current.isoformat())
+    previous_rows, previous_coverage = _window_coverage(
+        conn, previous_since_dt.isoformat(), since_dt.isoformat()
+    )
     groups = known_group_chats(conn)
 
     def chat_count(rows: list[dict[str, Any]]) -> int:
@@ -953,11 +1041,25 @@ def brief_report(
     message_coverage_ratio = max(len(current_rows), len(previous_rows)) / max(
         1, min(len(current_rows), len(previous_rows))
     )
-    coverage_comparable = bool(current_rows and previous_rows) and (
-        chat_coverage_ratio <= 3 and message_coverage_ratio <= 10
+    window_truncated = bool(current_coverage["truncated"] or previous_coverage["truncated"])
+    coverage_comparable = (
+        bool(current_rows and previous_rows)
+        and not window_truncated
+        and chat_coverage_ratio <= 3
+        and message_coverage_ratio <= 10
     )
+    if current_coverage["truncated"]:
+        coverage_line = (
+            f"- 覆盖：⚠️ 窗口内共 {current_coverage['total']} 条，本简报只纳入最新 {current_coverage['read']} 条"
+            f"（{current_coverage['covered_since']} 之后）；更早的 {current_coverage['omitted']} 条"
+            "没有参与待回复、承诺和主题判断，不能当作完整简报。"
+        )
+    else:
+        coverage_line = f"- 覆盖：窗口内已入库的 {current_coverage['total']} 条全部纳入"
 
-    if freshness_hours is not None and freshness_hours > 2:
+    if window_truncated:
+        change_line = "- 变化：窗口消息超过单次读取上限，暂不解读环比"
+    elif freshness_hours is not None and freshness_hours > 2:
         change_line = (
             f"- 变化：当前窗口尚未完整刷新，暂不解读环比；"
             f"原始计数为消息 {len(current_rows) - len(previous_rows):+d}、"
@@ -982,6 +1084,7 @@ def brief_report(
         f"- 消息：{len(current_rows)} 条；会话：{chat_count(current_rows)} 个",
         f"- 前一窗口：{len(previous_rows)} 条；会话：{chat_count(previous_rows)} 个",
         change_line,
+        coverage_line,
         f"- 数据新鲜度：{stale_note}",
         "",
         "## 待回复",
@@ -1071,5 +1174,8 @@ def brief_report(
         "open_promises": len(open_promises),
         "freshness_hours": freshness_hours,
         "coverage_comparable": coverage_comparable,
+        "window_total": current_coverage["total"],
+        "window_truncated": bool(current_coverage["truncated"]),
+        "window_omitted": current_coverage["omitted"],
     }
     return "\n".join(lines) + "\n", metadata

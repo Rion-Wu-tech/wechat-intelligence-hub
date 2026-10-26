@@ -124,15 +124,19 @@ def init_opportunity_schema(conn: sqlite3.Connection) -> None:
     for column, declaration in migrations.items():
         if column not in columns:
             conn.execute(f"alter table opportunities add column {column} {declaration}")
+    # Human decisions always make a record a formal opportunity. A stage that only
+    # the extractor inferred does not: that legacy rule runs once, when a database
+    # from before record_type existed is upgraded, and never on later opens.
+    legacy_stage_rule = "" if "record_type" in columns else "or stage != '新线索'"
     conn.execute(
-        """
+        f"""
         update opportunities
         set record_type = 'opportunity'
         where record_type = 'candidate'
           and (
                 status in ('active', 'waiting', 'paused', 'won', 'lost')
-                or stage != '新线索'
                 or stage_locked = 1
+                {legacy_stage_rule}
           )
         """
     )
@@ -533,6 +537,18 @@ def list_opportunity_inbox(
     return rows[:limit]
 
 
+def normalize_follow_up(value: str) -> str:
+    """Accept YYYY-MM-DD with an optional time; reject anything a date comparison would misread."""
+    text = str(value or "").strip()
+    try:
+        if len(text) == 10:
+            return datetime.strptime(text, "%Y-%m-%d").strftime("%Y-%m-%d")
+        parsed = datetime.fromisoformat(text.replace("T", " "))
+    except ValueError:
+        raise ValueError(f"跟进日期格式无效：{text or '空'}；请使用 YYYY-MM-DD，例如 2026-08-20") from None
+    return parsed.strftime("%Y-%m-%d %H:%M:%S")
+
+
 def list_today_opportunities(
     conn: sqlite3.Connection,
     *,
@@ -541,6 +557,8 @@ def list_today_opportunities(
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     today_value = (today or datetime.now().strftime("%Y-%m-%d"))[:10]
+    # A waiting record without a date predates the date requirement; it stays
+    # visible at the end of the list instead of silently dropping out.
     sql = """
         select o.*,
                (select count(*) from opportunity_evidence e where e.opportunity_id = o.id) as evidence_count
@@ -550,11 +568,12 @@ def list_today_opportunities(
           and (o.record_type = 'opportunity' or o.confidence in ('high', 'confirmed'))
           and (
                 (o.next_follow_up != '' and substr(o.next_follow_up, 1, 10) <= ?)
-                or (o.next_follow_up = '' and o.status in ('new', 'active'))
+                or o.next_follow_up = ''
           )
         order by
             case
                 when o.next_follow_up != '' and substr(o.next_follow_up, 1, 10) <= ? then 0
+                when o.status = 'waiting' then 4
                 when o.stage = '已发布待结算' then 1
                 when o.status = 'active' then 2
                 else 3
@@ -592,8 +611,16 @@ def update_opportunity(
         raise ValueError(f"找不到商机 ID：{opportunity_id}")
     if status and status not in ALL_STATUSES:
         raise ValueError(f"不支持的状态：{status}")
+    if next_follow_up is not None and not clear_follow_up:
+        next_follow_up = normalize_follow_up(next_follow_up)
 
     values = dict(row)
+    final_status = status if status is not None else str(values.get("status") or "")
+    final_follow_up = "" if clear_follow_up else (
+        next_follow_up if next_follow_up is not None else str(values.get("next_follow_up") or "")
+    )
+    if final_status == "waiting" and not final_follow_up and (status == "waiting" or clear_follow_up):
+        raise ValueError("等待中的商机必须有跟进日期：请同时提供 --follow-up YYYY-MM-DD，避免它从今日行动里消失")
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     assignments: list[str] = ["updated_at = ?"]
     params: list[Any] = [now]
