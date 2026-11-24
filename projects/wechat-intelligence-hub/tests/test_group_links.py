@@ -212,20 +212,20 @@ class CrossGroupDealProbabilityTests(unittest.TestCase):
 
     def test_joined_channel_invite_is_not_counted_as_new_opportunity(self) -> None:
         messages = [
-            message("前端哥·长期主义共创群", "前端哥Liam", "想进飞书群接商单的朋友扫码，通过审核就可以进群报名接单"),
+            message("示例博主·示例共创群", "示例博主A", "想进飞书群接商单的朋友扫码，通过审核就可以进群报名接单"),
         ]
 
-        summary = radar.summarize_group(messages, ["前端哥Liam"])
+        summary = radar.summarize_group(messages, ["示例博主A"])
 
         self.assertEqual(summary["变现机会数"], "0")
         self.assertEqual(summary["建议动作"], "低优先级，不用看")
 
     def test_joined_channel_new_brief_is_still_counted(self) -> None:
         messages = [
-            message("前端哥·长期主义共创群", "前端哥Liam", "新一轮 AI 工具商单招募博主，预算 1500，今晚截止"),
+            message("示例博主·示例共创群", "示例博主A", "新一轮 AI 工具商单招募博主，预算 1500，今晚截止"),
         ]
 
-        summary = radar.summarize_group(messages, ["前端哥Liam"])
+        summary = radar.summarize_group(messages, ["示例博主A"])
 
         self.assertEqual(summary["变现机会数"], "1")
         self.assertIn("优先点开原群", summary["建议动作"])

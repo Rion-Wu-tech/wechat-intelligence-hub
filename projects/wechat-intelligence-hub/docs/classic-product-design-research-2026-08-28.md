@@ -28,7 +28,7 @@ Superhuman 使用 Split Inbox 把一个巨大收件箱拆成少量稳定分区�
 
 Attio 用关系属性连接人、公司、交易、工作区和活动；Ask Attio 进一步把邮件、通话、笔记和产品数据串成客户关系故事，而不是让用户在多个标签页重建上下文。[Attio 关系模型](https://attio.com/help/reference/industry-guides/sales-led)、[Ask Attio](https://attio.com/blog/introducing-ask-attio)
 
-转化：Starryblu、荷老师、周胜赫、报价与多段聊天应合并为一个关系档案。群聊、私信和商机只是这个档案的不同事件。
+转化：同一品牌、多位联系人、报价与多段聊天应合并为一个关系档案。群聊、私信和商机只是这个档案的不同事件。
 
 ### Granola：AI 总结必须能回到具体原话
 
