@@ -1,0 +1,91 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wechat-slim"
+version = "1.0.0"
+description = "WeChat Slim - 微信智能无损瘦身工具 (Mac 版)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.8,<4.0"
+authors = [
+    {name = "LuckTerence", email = "xihuan1127@gmail.com"}
+]
+keywords = ["wechat", "cleanup", "storage", "mac", "optimization"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: End Users/Desktop",
+    "Operating System :: MacOS :: MacOS X",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+
+[project.urls]
+Homepage = "https://github.com/LuckTerence/CleanYourWechatTool"
+"Bug Tracker" = "https://github.com/LuckTerence/CleanYourWechatTool/issues"
+Documentation = "https://github.com/LuckTerence/CleanYourWechatTool/blob/main/docs/USAGE.md"
+
+[project.scripts]
+wechat-slim = "wechat_slim:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=23.1.0",
+    "mypy>=1.0.0",
+]
+webui = [
+    "streamlit>=1.25.0",
+]
+
+[tool.setuptools]
+py-modules = ["wechat_slim"]
+package-dir = {"" = "projects"}
+
+
+[tool.black]
+line-length = 88
+target-version = ['py38', 'py39', 'py310', 'py311']
+include = '\.pyi?$'
+exclude = '''
+/(
+    \.git
+  | \.hg
+  | \.mypy_cache
+  | \.tox
+  | \.venv
+  | _build
+  | buck-out
+  | build
+  | dist
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 88
+skip = [".git", "__pycache__", ".venv"]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false  # 渐进式启用类型检查
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+addopts = "-ra -q --cov=projects --cov-report=html --cov-report=term"
+testpaths = [
+    "projects/wechat-intelligence-hub/tests",
+]
+filterwarnings = [
+    "ignore::DeprecationWarning",
+]
