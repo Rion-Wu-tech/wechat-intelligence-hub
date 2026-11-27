@@ -589,6 +589,31 @@ class ReaderContractTest(unittest.TestCase):
         payload = self.run_cli("resolve-chat", "合作方 Alice")
         self.assertEqual(payload["data"]["candidates"][0]["username"], "wxid_alice")
 
+    def test_resolve_chat_group_by_name_when_group_is_a_contact(self):
+        payload = self.run_cli("resolve-chat", "AI 项目群", "--type-filter", "group")
+        self.assertEqual(payload["data"]["candidates"][0]["username"], "team@chatroom")
+
+    def _drop_group_contact_rows(self):
+        # Windows WeChat 4.x keeps groups out of the contact table (issue #82).
+        with sqlite3.connect(self.contact) as conn:
+            conn.execute("DELETE FROM contact WHERE username LIKE '%@chatroom'")
+
+    def test_resolve_chat_group_id_when_group_is_not_a_contact(self):
+        self._drop_group_contact_rows()
+        payload = self.run_cli("resolve-chat", "team@chatroom", "--type-filter", "group")
+        candidate = payload["data"]["candidates"][0]
+        self.assertEqual(candidate["username"], "team@chatroom")
+        self.assertEqual(candidate["chat_type"], "group")
+
+    def test_resolve_chat_lists_session_only_groups(self):
+        self._drop_group_contact_rows()
+        payload = self.run_cli("resolve-chat", "chatroom", "--type-filter", "group")
+        self.assertEqual([row["username"] for row in payload["data"]["candidates"]], ["team@chatroom"])
+
+    def test_resolve_chat_passes_unknown_group_id_through(self):
+        payload = self.run_cli("resolve-chat", "999@chatroom")
+        self.assertEqual(payload["data"]["candidates"][0]["username"], "999@chatroom")
+
     def test_timeline_contract_and_order(self):
         payload = self.run_cli("timeline", "合作方 Alice", "--limit", "10", "--display-order", "asc")
         rows = payload["data"]["messages"]

@@ -884,9 +884,53 @@ def contacts(db: DatabaseSet, limit: int, keyword: str | None) -> list[dict[str,
     return result
 
 
+def is_chat_id(value: str) -> bool:
+    return value.startswith("wxid_") or value.endswith("@chatroom") or value.startswith("gh_")
+
+
+def bare_chat(username: str) -> dict[str, Any]:
+    return {
+        "username": username,
+        "display_name": username,
+        "nick_name": None,
+        "remark": None,
+        "alias": None,
+        "chat_type": chat_type(username, {} if username.endswith("@chatroom") else None),
+        "type": "group" if username.endswith("@chatroom") else "friend",
+    }
+
+
+def session_usernames(db: DatabaseSet) -> list[str]:
+    if not db.session_db:
+        return []
+    try:
+        with db.connect(db.session_db) as conn:
+            return [str(row[0]) for row in conn.execute("SELECT username FROM SessionTable") if row[0]]
+    except ReaderError:  # connect() wraps driver errors; sessions are an optional supplement here
+        return []
+
+
+def chat_directory(db: DatabaseSet) -> list[dict[str, Any]]:
+    """Contacts plus sessions the contact table does not list.
+
+    Windows WeChat 4.x keeps groups in chat_room/SessionTable rather than contact,
+    so matching contacts alone cannot find them (issue #82).
+    """
+    rows = contacts(db, 100000, None)
+    known = {str(row.get("username") or "") for row in rows}
+    for username in session_usernames(db):
+        if username not in known:
+            known.add(username)
+            rows.append(bare_chat(username))
+    return rows
+
+
 def resolve_chat(db: DatabaseSet, query: str, type_filter: str | None, limit: int) -> list[dict[str, Any]]:
     needle = query.casefold().replace(" ", "")
-    rows = contacts(db, 100000, None)
+    rows = chat_directory(db)
+    query = query.strip()
+    if is_chat_id(query) and all(str(row.get("username") or "") != query for row in rows):
+        rows.append(bare_chat(query))
     allowed = set((type_filter or "").split(",")) - {"", "all"}
     ranked: list[tuple[int, dict[str, Any]]] = []
     for item in rows:
@@ -902,7 +946,7 @@ def resolve_chat(db: DatabaseSet, query: str, type_filter: str | None, limit: in
 
 
 def resolve_username(db: DatabaseSet, chat: str) -> str:
-    if chat.startswith("wxid_") or chat.endswith("@chatroom") or chat.startswith("gh_"):
+    if is_chat_id(chat):
         return chat
     rows = resolve_chat(db, chat, None, 2)
     if not rows:
