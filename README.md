@@ -177,6 +177,23 @@ wechat_daily_report.html      # 旗舰交互式报告
 
 HTML 版支持全局搜索、分区导航、话题日报/重点群聊/群聊筛选切换、群聊展开、原链接跳转、明暗主题、打印和当前分区 Markdown 下载。报告内容会根据每位使用者的本地聊天、个人 Profile 和当前计划生成，界面与公开仓库中的旗舰渲染器保持一致。
 
+以下截图全部使用虚构示例数据生成，人名、群名、品牌和金额均不对应真实对象：
+
+![综合行动报告](docs/images/report-overview.png)
+
+| 群聊日报 · 话题 | 群聊日报 · 全部群聊筛选 |
+|---|---|
+| ![话题日报](docs/images/report-group-topics.png) | ![群聊筛选](docs/images/report-group-selector.png) |
+| **重点联系人** | **手机端** |
+| ![重点联系人](docs/images/report-contacts.png) | <img src="docs/images/report-mobile.png" alt="手机端综合行动报告" width="280"> |
+
+示例素材在 [samples/demo-report](projects/wechat-intelligence-hub/samples/demo-report)，可以自己重新渲染：
+
+```bash
+cd projects/wechat-intelligence-hub
+.venv/bin/python wechat_intelligence_hub.py render-bundle samples/demo-report --title "微信情报日报（示例）"
+```
+
 除了按时间生成综合报告，还可以围绕某条信息、某个人、某个群、某个产品/物品、某个微信标签、某个项目或某件具体事件定向查找：系统会先定位相关消息和上下文，再按会话、时间和事件关系去重总结。单个对象和回复建议默认直接在 Codex 中回答，不会为了一个简单问题额外生成网页。如果希望定向调查也保存成双版本，请在请求中明确说“同时输出 Markdown 和 HTML”。
 
 更完整的首次使用、常用提问、输出模式和命令行说明见 [`docs/USAGE.md`](docs/USAGE.md)。
